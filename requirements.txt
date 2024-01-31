@@ -1,0 +1,9 @@
+dimod==0.12.14
+dwave_cloud_client==0.11.2
+dwave_inspector==0.4.4
+dwave_preprocessing==0.6.5
+dwave_samplers==1.2.0
+dwave_system==1.23.0
+matplotlib==3.8.2
+numpy==1.26.3
+Pyomo==6.7.0
