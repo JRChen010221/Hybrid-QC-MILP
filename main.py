@@ -5,8 +5,8 @@ from data import JobshopData
 from visualiaztion import plot_gantt_chart
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--job_num", "-j", type=int, default=10)
-parser.add_argument("--machine_num", "-m", type=int, default=4)
+parser.add_argument("--job_num", "-j", type=int, default=2)
+parser.add_argument("--machine_num", "-m", type=int, default=2)
 parser.add_argument("--task", "-t", type=str, default="hybrid")
 parser.add_argument("--device", "-d", type=str, default="sim")
 args = parser.parse_args()
