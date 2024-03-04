@@ -25,9 +25,9 @@ class ClassicSolver:
             feasibility, optimal_x, optimal_t, optimal_y, optimal_value, solve_time_i = self.solve_model(model)
             print(f"************End solving instance {i+1}************")
             if feasibility:
-                optimal_xs.append(optimal_x.tolist())
-                optimal_ts.append(optimal_t.tolist())
-                optimal_ys.append(optimal_y.tolist())
+                optimal_xs.append(dict(optimal_x))
+                optimal_ts.append(dict(optimal_t))
+                optimal_ys.append(dict(optimal_y))
                 optimal_values.append(optimal_value)
                 solve_time.append(solve_time_i)
             else:
@@ -51,7 +51,7 @@ class ClassicSolver:
             os.makedirs(save_pth)
         result_pth = os.path.join(save_pth, f"C_{self.job_num}_{self.machine_num}.json")
         with open(result_pth, 'w') as wf:
-            json.dump(result_dict, wf)
+            json.dump(result_dict, wf, indent=2)
             
 
     def construct_model(self, p_arr: np.ndarray, c_arr: np.ndarray, 
@@ -60,6 +60,7 @@ class ClassicSolver:
         model = pyo.ConcreteModel()
         model.j_index = pyo.RangeSet(1, p_arr.shape[0])
         model.m_index = pyo.RangeSet(1, p_arr.shape[1])
+        model.y_index = [(j, jp) for j in model.j_index for jp in model.j_index if j != jp]
         model.process_time = pyo.Param(model.j_index, model.m_index, 
                                        initialize=lambda model, j, m: p_arr[j-1, m-1])
         model.process_cost = pyo.Param(model.j_index, model.m_index,
@@ -68,7 +69,7 @@ class ClassicSolver:
         model.due_time = pyo.Param(model.j_index, initialize=lambda model, j: d_arr[0, j-1])
         model.x = pyo.Var(model.j_index, model.m_index, domain=pyo.Binary)
         model.t = pyo.Var(model.j_index, domain=pyo.NonNegativeReals)
-        model.y = pyo.Var(model.j_index, model.j_index, domain=pyo.Binary)
+        model.y = pyo.Var(model.y_index, domain=pyo.Binary)
         model.objective = pyo.Objective(expr=sum(model.process_cost[j, m] * model.x[j, m] 
                                                  for j in model.j_index for m in model.m_index))
         model.constraints = pyo.ConstraintList()
@@ -78,13 +79,13 @@ class ClassicSolver:
                                   <= model.due_time[j])
             model.constraints.add(sum(model.x[j, m] for m in model.m_index) == 1)
         def sequence_rule1(m, j, jp, k):
-            if j <= jp:
+            if j < jp:
                 return m.y[j, jp] + m.y[jp, j] >= m.x[j, k] + m.x[jp, k] - 1
             else:
                 return pyo.Constraint.Skip
         def sequence_rule2(m, j, jp):
             if j != jp:
-                return m.t[jp] >= m.t[j] + sum(p_arr[j-1, k-1] * m.x[j, k] for k in m.m_index) - \
+                return m.t[jp] >= m.t[j] + sum(model.process_time[j, k] * m.x[j, k] for k in m.m_index) - \
                     U * (1 - m.y[j, jp])
             else:
                 return pyo.Constraint.Skip
@@ -116,9 +117,9 @@ class ClassicSolver:
         if (results.solver.status == SolverStatus.ok) and \
            (results.solver.termination_condition == TerminationCondition.optimal):
             feasibility = True
-            optimal_x = np.array([[pyo.value(model.x[j, m]) for m in model.m_index] for j in model.j_index])
-            optimal_t = np.array([pyo.value(model.t[j]) for j in model.j_index])
-            optimal_y = np.array([[pyo.value(model.y[i, j]) for i in model.j_index] for j in model.j_index])
+            optimal_x = [(f'x[{j}, {m}]', pyo.value(model.x[j, m])) for j in model.j_index for m in model.m_index]
+            optimal_t = [(f't[{j}]', pyo.value(model.t[j])) for j in model.j_index]
+            optimal_y = [(f'y[{j}, {jp}]', pyo.value(model.y[j, jp])) for j, jp in model.y_index]
             optimal_value = pyo.value(model.objective)
             print(f"The scheduling problem is feasible with optimal value {optimal_value} and solving time {solve_time}")
             return feasibility, optimal_x, optimal_t, optimal_y, optimal_value, solve_time
