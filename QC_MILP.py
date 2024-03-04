@@ -67,9 +67,9 @@ class QCMILPSolver:
                               f"and solving time {total_time}")
                         print(f"************End solving instance {i+1}************")
                         solve_time.append(total_time)
-                        optimal_xs.append(optimal_x.tolist())
-                        optimal_ts.append(optimal_t.tolist())
-                        feasible_sequence.append(sequence.tolist())
+                        optimal_xs.append(optimal_x)
+                        optimal_ts.append(optimal_t)
+                        feasible_sequence.append(sequence)
                         optimal_values.append(optimal_value)
         result_dict = {}
         result_dict["instance_num"] = len(self.data.instances)
@@ -86,7 +86,7 @@ class QCMILPSolver:
             os.makedirs(save_pth)
         result_pth = os.path.join(save_pth, f"QC_{self.job_num}_{self.machine_num}.json")
         with open(result_pth, 'w') as wf:
-            json.dump(result_dict, wf)
+            json.dump(result_dict, wf, indent=2)
 
     def _construct_model(self, p_arr: np.ndarray, c_arr: np.ndarray, 
                            r_arr: np.ndarray, d_arr: np.ndarray) -> None:
@@ -141,9 +141,9 @@ class QCMILPSolver:
         if (solver_results.solver.status == SolverStatus.ok) and \
            (solver_results.solver.termination_condition == TerminationCondition.optimal):
             feasibility = True
-            optimal_x = np.array([[pyo.value(self.pyo_model.x[j, m]) for m in self.pyo_model.m_index] 
-                                   for j in self.pyo_model.j_index])
-            optimal_t = np.array([pyo.value(self.pyo_model.t[j]) for j in self.pyo_model.j_index])
+            optimal_x = dict([(f'x[{j}, {m}]', pyo.value(self.pyo_model.x[j, m])) for j in self.pyo_model.j_index
+                         for m in self.pyo_model.m_index])
+            optimal_t = dict([(f't[{j}]', pyo.value(self.pyo_model.t[j])) for j in self.pyo_model.j_index])
             optimal_value = pyo.value(self.pyo_model.objective)
             solve_time = end - start
             print(f"The relaxed MILP problem is feasible")
@@ -155,7 +155,7 @@ class QCMILPSolver:
             print(str(solver_results.solver))
             return feasibility, None, None, None, None
         
-    def _construct_qubo(self, optimal_x: np.ndarray, optimal_t: np.ndarray, 
+    def _construct_qubo(self, optimal_x: List[tuple[str, float]], optimal_t: List[tuple[str, float]], 
                         p_arr: np.ndarray, jobs_assigned: List[int]) -> tuple[BinaryQuadraticModel, List[tuple], float]:
         """
         Constructs the QUBO model based on the given relaxed MILP solution.
@@ -175,10 +175,12 @@ class QCMILPSolver:
         U = sum(max(p_arr[j, :]) for j in range(p_arr.shape[0]))
         combination = list(itertools.combinations(jobs_assigned, 2))
         for i, j in combination:
-            K1 = ((optimal_t[j]-optimal_t[i]-sum(p_arr[i, k]*optimal_x[i, k] 
-                    for k in range(optimal_x.shape[1]))))/U
-            K2 = ((optimal_t[i]-optimal_t[j]-sum(p_arr[j, k]*optimal_x[j, k] 
-                    for k in range(optimal_x.shape[1]))))/U
+            x_ims = [optimal_x[f'x[{i+1}, {k+1}]'] for k in range(p_arr.shape[1])]
+            x_jms = [optimal_x[f'x[{j+1}, {k+1}]'] for k in range(p_arr.shape[1])]
+            K1 = ((optimal_t[f't[{j+1}]']-optimal_t[f't[{i+1}]']-sum(p_arr[i, k]*x_ims[k] 
+                    for k in range(p_arr.shape[1]))))/U
+            K2 = ((optimal_t[f't[{i+1}]']-optimal_t[f't[{j+1}]']-sum(p_arr[j, k]*x_jms[k] 
+                    for k in range(p_arr.shape[1]))))/U
             bqm1.add_variable(f"y_{i}_{j}", -1)
             bqm1.add_variable(f"y_{j}_{i}", -1)
             bqm1.add_interaction(f"y_{i}_{j}", f"y_{j}_{i}", 2)
@@ -187,7 +189,7 @@ class QCMILPSolver:
         bqm_model = bqm1 + bqm2
         return bqm_model, combination, U
         
-    def _solve_qubo(self, optimal_x: np.ndarray, optimal_t: np.ndarray, p_arr: np.ndarray) -> \
+    def _solve_qubo(self, optimal_x: List[tuple[str, float]], optimal_t: List[tuple[str, float]], p_arr: np.ndarray) -> \
                     tuple[bool, np.ndarray, List[int], float]:   
         """
         Solve the QUBO problem using the given relaxed MILP solution.
@@ -202,11 +204,12 @@ class QCMILPSolver:
             feasibility flag, y_{ij} sequence, infeasible machine list, and the solving time.
         """
         total_feasibility = True
-        sequence = np.zeros((optimal_x.shape[0], optimal_x.shape[0]))
+        sequence = dict()
         infeasible_m = []
         solve_time = 0
-        for m in range(optimal_x.shape[1]):
-            jobs_assigned = np.nonzero(optimal_x[:, m])[0]
+        for m in range(p_arr.shape[1]):
+            m_jobs = np.array([optimal_x[f'x[{j+1}, {m+1}]'] for j in range(p_arr.shape[0])])
+            jobs_assigned = np.nonzero(m_jobs)[0]
             if len(jobs_assigned) > 1:
                 bqm_model, combination, U = self._construct_qubo(optimal_x, optimal_t, p_arr, jobs_assigned)
                 if self.device == "sim":
@@ -225,8 +228,8 @@ class QCMILPSolver:
                     feasibility = self._check_qubo_feasibility(p_arr, optimal_t, m, U, sample, combination)
                     if feasibility:
                         for i, j in combination:
-                            sequence[i, j] = sample[0][f"y_{i}_{j}"]
-                            sequence[j, i] = sample[0][f"y_{j}_{i}"]
+                            sequence[f'y[{i+1}, {j+1}]'] = int(sample[0][f"y_{i}_{j}"])
+                            sequence[f'y[{j+1}, {i+1}]'] = int(sample[0][f"y_{j}_{i}"])
                         break
                 if not feasibility:
                     total_feasibility = False
@@ -256,8 +259,8 @@ class QCMILPSolver:
         feasibility = True
         for i, j in combination:
             check1 = bool(sample[0][f"y_{i}_{j}"]+sample[0][f"y_{j}_{i}"] == 1)
-            check2 = bool(optimal_t[j] >= (optimal_t[i]+p_arr[i, m]-U*(1-sample[0][f"y_{i}_{j}"])))
-            check3 = bool(optimal_t[i] >= (optimal_t[j]+p_arr[j, m]-U*(1-sample[0][f"y_{j}_{i}"])))
+            check2 = bool(optimal_t[f't[{j+1}]'] >= (optimal_t[f't[{i+1}]']+p_arr[i, m]-U*(1-sample[0][f"y_{i}_{j}"])))
+            check3 = bool(optimal_t[f't[{i+1}]'] >= (optimal_t[f't[{j+1}]']+p_arr[j, m]-U*(1-sample[0][f"y_{j}_{i}"])))
             if not (check1 and check2 and check3):
                 feasibility = False
         return feasibility 
